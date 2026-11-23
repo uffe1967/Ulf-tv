@@ -1507,7 +1507,7 @@ private fun PlayerScreen(
         }
     }
 
-    val (country, sub) = repo.parseCountryAndSub(item.category, item.title)
+    val (country, sub) = TvEngine.parseCountryAndSub(item.category, item.title)
 
     Box(
         modifier = Modifier
