@@ -139,8 +139,14 @@ class RemoteWebSetup(
             """.trimIndent()
 
             val bytes = html.toByteArray(Charsets.UTF_8)
-           val out = client.getOutputStream()
+            val out = client.getOutputStream()
             val header = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n"
             out.write(header.toByteArray())
             out.write(bytes)
             out.flush()
+        } catch (_: Exception) {
+        } finally {
+            try { client.close() } catch (_: Exception) {}
+        }
+    }
+}
