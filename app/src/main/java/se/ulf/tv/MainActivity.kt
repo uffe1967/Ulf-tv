@@ -547,7 +547,7 @@ private object TvEngine {
     }
 
     private fun parseCountryAndSub(category: String, title: String): Pair<String, String> {
-        val raw = "$category$title".trim()
+        val raw = "$category $title".trim()
         val upCat = category.uppercase().trim()
         val upTitle = title.uppercase().trim()
         var country = "Övriga"
@@ -558,7 +558,7 @@ private object TvEngine {
             country = countryMap[code] ?: code
         } else {
             for ((k, v) in countryMap) {
-                if (upCat.startsWith("$k ") \vert{}\vert{} upCat.contains(" $k ") || upCat.contains(v.uppercase())) {
+                if (upCat.startsWith("$k ") || upCat.contains(" $k ") || upCat.contains(v.uppercase())) {
                     country = v
                     break
                 }
@@ -579,7 +579,7 @@ private object TvEngine {
     }
 
     private fun normalizeGenre(cat: String, text: String): String {
-        val l = "$cat$text".lowercase()
+        val l = "$cat $text".lowercase()
         return when {
             l.contains("action") -> "Action"
             l.contains("komedi") || l.contains("comedy") -> "Komedi"
@@ -617,7 +617,7 @@ private object TvEngine {
     }
 
     private fun isAdult(title: String, cat: String): Boolean {
-        val c = "$title$cat".lowercase()
+        val c = "$title $cat".lowercase()
         return c.contains("xxx") || c.contains("adult") || c.contains("18+") || c.contains("porn")
     }
 
@@ -635,4 +635,828 @@ private object TvEngine {
             TvMediaItem("demo_2", "SE | Sport 4K", "SE | Sport", "Sverige", "Sport", TvContentType.LIVE, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4", qualityBadge = "4K")
         ),
         movies = listOf(
-            TvMediaItem("demo_m1", "Big Buck Bunny (2025)", "Barn & Familj", "USA", "Barn & Familj", TvContentType.MOVIE, "
+            TvMediaItem("demo_m1", "Big Buck Bunny (2025)", "Barn & Familj", "USA", "Barn & Familj", TvContentType.MOVIE, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4", posterUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Big_buck_bunny_poster_big.jpg/440px-Big_buck_bunny_poster_big.jpg", backdropUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Big_buck_bunny_poster_big.jpg/800px-Big_buck_bunny_poster_big.jpg", rating = "8.4", year = "2025", addedTimestamp = 200L, plot = "En godhjärtad jättekanin i skogen.", qualityBadge = "1080p"),
+            TvMediaItem("demo_m2", "Tears of Steel (2026)", "Sci-Fi & Fantasy", "Nederländerna", "Sci-Fi & Fantasy", TvContentType.MOVIE, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4", posterUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/7/70/Tears_of_Steel_poster.jpg/440px-Tears_of_Steel_poster.jpg", backdropUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/7/70/Tears_of_Steel_poster.jpg/800px-Tears_of_Steel_poster.jpg", rating = "7.9", year = "2026", addedTimestamp = 300L, plot = "Futuristiskt äventyr.", qualityBadge = "4K")
+        ),
+        series = emptyList()
+    )
+}
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        setContent { UlfTvApp() }
+    }
+}
+
+@Composable
+private fun UlfTvApp() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var settings by remember { mutableStateOf(loadSettings(context)) }
+    var accounts by remember { mutableStateOf(loadAccounts(context)) }
+    var activeAccountId by remember { mutableStateOf(loadActiveAccountId(context)) }
+    var favorites by remember { mutableStateOf(loadFavorites(context)) }
+    var catalog by remember { mutableStateOf(TvEngine.demoCatalog()) }
+    var statusText by remember { mutableStateOf("Demoläge") }
+    var isLoading by remember { mutableStateOf(false) }
+
+    var section by remember { mutableStateOf(TvSection.HOME) }
+    var playingItem by remember { mutableStateOf<TvMediaItem?>(null) }
+    var selectedSeries by remember { mutableStateOf<TvMediaItem?>(null) }
+    var pinUnlocked by remember { mutableStateOf(false) }
+    var pendingPlay by remember { mutableStateOf<TvMediaItem?>(null) }
+
+    val activeAccount = accounts.firstOrNull { it.id == activeAccountId }
+
+    fun reload(acc: TvAccount?, st: TvSettings) {
+        scope.launch {
+            isLoading = true
+            catalog = TvEngine.loadCatalog(acc, st) { statusText = it }
+            statusText = if (acc == null) "Demoläge • ${catalog.liveChannels.size} live"
+            else "${acc.name}: ${catalog.liveChannels.size} live • ${catalog.movies.size} filmer • ${catalog.series.size} serier"
+            isLoading = false
+        }
+    }
+
+    LaunchedEffect(activeAccountId, settings.userAgent, settings.hideAdult) {
+        reload(activeAccount, settings)
+    }
+
+    fun toggleFav(id: String) {
+        favorites = if (favorites.contains(id)) favorites - id else favorites + id
+        saveFavorites(context, favorites)
+    }
+
+    fun startItem(item: TvMediaItem) {
+        if (item.type == TvContentType.SERIES) {
+            selectedSeries = item
+        } else if (settings.parentalEnabled && !pinUnlocked && isAdultItem(item)) {
+            pendingPlay = item
+        } else {
+            playingItem = item
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Brush.verticalGradient(listOf(Color(0xFF0A0D14), Color(0xFF06070B), Color(0xFF040508))))
+            .onPreviewKeyEvent { ev ->
+                if (ev.type == KeyEventType.KeyDown && ev.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_BACK) {
+                    when {
+                        playingItem != null -> { playingItem = null; true }
+                        selectedSeries != null -> { selectedSeries = null; true }
+                        section != TvSection.HOME -> { section = TvSection.HOME; true }
+                        else -> false
+                    }
+                } else false
+            }
+    ) {
+        when {
+            playingItem != null -> PlayerViewScreen(
+                item = playingItem!!,
+                liveChannels = catalog.liveChannels,
+                settings = settings,
+                isFavorite = favorites.contains(playingItem!!.id),
+                onToggleFav = { toggleFav(playingItem!!.id) },
+                onZap = { playingItem = it },
+                onExit = { playingItem = null }
+            )
+
+            selectedSeries != null -> SeriesScreen(
+                series = selectedSeries!!,
+                account = activeAccount,
+                userAgent = settings.userAgent,
+                isFavorite = favorites.contains(selectedSeries!!.id),
+                onToggleFav = { toggleFav(selectedSeries!!.id) },
+                onPlayEp = { ep ->
+                    playingItem = TvMediaItem(
+                        id = "ep_${ep.id}",
+                        title = "${selectedSeries!!.title} • S${ep.season}E${ep.episodeNum} - ${ep.title}",
+                        category = selectedSeries!!.category,
+                        country = selectedSeries!!.country,
+                        subCategory = selectedSeries!!.subCategory,
+                        type = TvContentType.SERIES,
+                        streamUrl = ep.streamUrl,
+                        posterUrl = selectedSeries!!.posterUrl,
+                        backdropUrl = selectedSeries!!.backdropUrl,
+                        plot = selectedSeries!!.plot,
+                        qualityBadge = selectedSeries!!.qualityBadge
+                    )
+                },
+                onBack = { selectedSeries = null }
+            )
+
+            else -> Column(modifier = Modifier.fillMaxSize()) {
+                TopBar(section, statusText, isLoading, { section = it }, { reload(activeAccount, settings) })
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    when (section) {
+                        TvSection.HOME -> HomeScreen(catalog, favorites, ::startItem) { section = it }
+                        TvSection.LIVE -> LiveCountryScreen(catalog.liveChannels, favorites, ::toggleFav, ::startItem)
+                        TvSection.MOVIES -> VodScreen("Filmer", catalog.movies, favorites, ::toggleFav, ::startItem)
+                        TvSection.SERIES -> VodScreen("Serier", catalog.series, favorites, ::toggleFav, ::startItem)
+                        TvSection.FAVORITES -> {
+                            val all = catalog.liveChannels + catalog.movies + catalog.series
+                            VodScreen("Favoriter", all.filter { favorites.contains(it.id) }, favorites, ::toggleFav, ::startItem)
+                        }
+                        TvSection.SEARCH -> SearchScreen(catalog, ::startItem)
+                        TvSection.SETTINGS -> SettingsScreen(
+                            settings = settings,
+                            accounts = accounts,
+                            activeId = activeAccountId,
+                            onSaveSettings = { settings = it; saveSettings(context, it) },
+                            onAddAccount = { acc ->
+                                val list = accounts + acc
+                                accounts = list; saveAccounts(context, list)
+                                activeAccountId = acc.id; saveActiveAccountId(context, acc.id)
+                                reload(acc, settings); section = TvSection.HOME
+                            },
+                            onSelectAccount = { id ->
+                                activeAccountId = id; saveActiveAccountId(context, id)
+                                reload(accounts.firstOrNull { it.id == id }, settings)
+                            },
+                            onDeleteAccount = { id ->
+                                val list = accounts.filterNot { it.id == id }
+                                accounts = list; saveAccounts(context, list)
+                                if (activeAccountId == id) {
+                                    val next = list.firstOrNull()?.id.orEmpty()
+                                    activeAccountId = next; saveActiveAccountId(context, next)
+                                    reload(list.firstOrNull(), settings)
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
+        if (pendingPlay != null) {
+            PinDialog(settings.parentalPin, {
+                pinUnlocked = true
+                val target = pendingPlay
+                pendingPlay = null
+                target?.let { playingItem = it }
+            }) { pendingPlay = null }
+        }
+    }
+}
+
+@Composable
+private fun TopBar(
+    current: TvSection,
+    status: String,
+    loading: Boolean,
+    onSelect: (TvSection) -> Unit,
+    onRefresh: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 42.dp, vertical = 18.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(Color.White), contentAlignment = Alignment.Center) {
+                Text("U", color = Color.Black, fontWeight = FontWeight.Black, fontSize = 22.sp)
+            }
+            Spacer(Modifier.width(12.dp))
+            Text("ULF TV", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+        }
+
+        Row(
+            modifier = Modifier.clip(RoundedCornerShape(50)).background(Color(0x26FFFFFF)).border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            TvSection.entries.forEach { tab ->
+                val sel = current == tab
+                var focused by remember { mutableStateOf(false) }
+                val scale by animateFloatAsState(if (focused) 1.06f else 1f, label = "nav")
+                Box(
+                    modifier = Modifier.scale(scale).clip(RoundedCornerShape(50))
+                        .background(when { sel -> Color.White; focused -> Color(0x44FFFFFF); else -> Color.Transparent })
+                        .onFocusChanged { focused = it.isFocused }.focusable().clickable { onSelect(tab) }
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(tab.icon, contentDescription = null, tint = if (sel) Color.Black else Color.White, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(tab.label, color = if (sel) Color.Black else Color.White, fontWeight = if (sel) FontWeight.Bold else FontWeight.Medium, fontSize = 14.sp)
+                    }
+                }
+            }
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(if (loading) "Synkar..." else status, color = Color(0xFF9CA3AF), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.width(210.dp))
+            var rf by remember { mutableStateOf(false) }
+            Box(
+                modifier = Modifier.size(38.dp).clip(CircleShape).background(if (rf) Color.White else Color(0x22FFFFFF)).onFocusChanged { rf = it.isFocused }.focusable().clickable { onRefresh() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = null, tint = if (rf) Color.Black else Color.White, modifier = Modifier.size(18.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeScreen(catalog: TvCatalog, favorites: Set<String>, onPlay: (TvMediaItem) -> Unit, onMore: (TvSection) -> Unit) {
+    val hero = catalog.movies.firstOrNull() ?: catalog.series.firstOrNull() ?: catalog.liveChannels.firstOrNull()
+    val favs = (catalog.liveChannels + catalog.movies + catalog.series).filter { favorites.contains(it.id) }
+
+    LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 48.dp), verticalArrangement = Arrangement.spacedBy(26.dp)) {
+        if (hero != null) {
+            item {
+                Box(modifier = Modifier.fillMaxWidth().height(300.dp).padding(horizontal = 42.dp).clip(RoundedCornerShape(24.dp)).background(Color(0xFF131826))) {
+                    if (hero.backdropUrl.isNotBlank()) AsyncImage(hero.backdropUrl, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(Color(0xF206080E), Color(0xB806080E), Color(0x3306080E)))))
+                    Column(modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth(0.65f).padding(30.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Badge(hero.country, Color(0xFF1E3A8A))
+                            Badge(hero.subCategory, Color(0xFF374151))
+                            if (hero.qualityBadge.isNotBlank()) Badge(hero.qualityBadge, Color(0xFF065F46))
+                        }
+                        Text(hero.title, color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.ExtraBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Button(onClick = { onPlay(hero) }, colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null)
+                            Spacer(Modifier.width(6.dp))
+                            Text(if (hero.type == TvContentType.SERIES) "Visa säsonger" else "Spela nu", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+        if (favs.isNotEmpty()) item { Shelf("Favoriter", favs.take(24), false, onPlay) { onMore(TvSection.FAVORITES) } }
+        if (catalog.liveChannels.isNotEmpty()) item { Shelf("Live TV • Länder (${catalog.liveChannels.size})", catalog.liveChannels.take(30), false, onPlay) { onMore(TvSection.LIVE) } }
+        if (catalog.movies.isNotEmpty()) item { Shelf("Senaste Filmer (${catalog.movies.size})", catalog.movies.sortedByDescending { it.addedTimestamp }.take(30), true, onPlay) { onMore(TvSection.MOVIES) } }
+        if (catalog.series.isNotEmpty()) item { Shelf("Senaste Serier (${catalog.series.size})", catalog.series.sortedByDescending { it.addedTimestamp }.take(30), true, onPlay) { onMore(TvSection.SERIES) } }
+    }
+}
+
+@Composable
+private fun LiveCountryScreen(channels: List<TvMediaItem>, favorites: Set<String>, onToggleFav: (String) -> Unit, onSelect: (TvMediaItem) -> Unit) {
+    val countries = remember(channels) {
+        val g = channels.groupBy { it.country }
+        listOf("Alla länder") + g.keys.sortedByDescending { g[it]?.size ?: 0 }
+    }
+    var selCountry by remember { mutableStateOf("Alla länder") }
+    val cChans = remember(channels, selCountry) { if (selCountry == "Alla länder") channels else channels.filter { it.country == selCountry } }
+    val subs = remember(cChans) {
+        val order = listOf("Sport", "Film & Serier", "Nyheter", "Barn", "Dokumentär", "Musik", "Allmänt")
+        val present = cChans.map { it.subCategory }.toSet()
+        listOf("Alla") + order.filter { present.contains(it) }
+    }
+    var selSub by remember { mutableStateOf("Alla") }
+    LaunchedEffect(selCountry) { selSub = "Alla" }
+    val visible = remember(cChans, selSub) { if (selSub == "Alla") cChans else cChans.filter { it.subCategory == selSub } }
+    var focused by remember { mutableStateOf(visible.firstOrNull()) }
+    LaunchedEffect(visible) { if (visible.isNotEmpty() && !visible.contains(focused)) focused = visible.first() }
+
+    Row(modifier = Modifier.fillMaxSize().padding(horizontal = 42.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+        LazyColumn(modifier = Modifier.width(230.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            item { Text("Länder", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 8.dp)) }
+            items(countries) { c ->
+                val count = if (c == "Alla länder") channels.size else channels.count { it.country == c }
+                val active = selCountry == c
+                Box(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(if (active) Color(0xFF2563EB) else Color(0x12FFFFFF)).focusable().clickable { selCountry = c }.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(c, color = Color.White, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        Text("$count", color = Color(0xFFCBD5E1), fontSize = 12.sp)
+                    }
+                }
+            }
+        }
+
+        Column(modifier = Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                items(subs) { s ->
+                    val active = selSub == s
+                    Button(onClick = { selSub = s }, colors = ButtonDefaults.buttonColors(containerColor = if (active) Color.White else Color(0x20FFFFFF), contentColor = if (active) Color.Black else Color.White), shape = RoundedCornerShape(50)) {
+                        Text(s, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+                }
+            }
+            focused?.let { info ->
+                Surface(color = Color(0x18FFFFFF), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Color(0x26FFFFFF)), modifier = Modifier.fillMaxWidth()) {
+                    Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(info.title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Badge("${info.country} • ${info.subCategory}", Color(0xFF1E3A8A))
+                                if (info.qualityBadge.isNotBlank()) Badge(info.qualityBadge, Color(0xFF065F46))
+                            }
+                            Text("Kategori: ${info.category} • Ljudspår & undertexter i spelaren", color = Color(0xFF9CA3AF), fontSize = 13.sp, maxLines = 1)
+                        }
+                        OutlinedButton(onClick = { onToggleFav(info.id) }, border = BorderStroke(1.dp, Color(0x55FFFFFF))) {
+                            Icon(if (favorites.contains(info.id)) Icons.Default.Favorite else Icons.Default.FavoriteBorder, contentDescription = null, tint = Color(0xFFF87171))
+                            Spacer(Modifier.width(6.dp))
+                            Text(if (favorites.contains(info.id)) "Favorit" else "Spara", color = Color.White)
+                        }
+                    }
+                }
+            }
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp), contentPadding = PaddingValues(vertical = 8.dp)) {
+                items(visible.take(250), key = { it.id }) { ch ->
+                    Box(Modifier.onFocusChanged { if (it.isFocused) focused = ch }) {
+                        MediaCard(ch, false) { onSelect(ch) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VodScreen(title: String, items: List<TvMediaItem>, favorites: Set<String>, onToggleFav: (String) -> Unit, onSelect: (TvMediaItem) -> Unit) {
+    val filters = remember(items) {
+        listOf("Senast tillagda", "Nysläppta (2025–2026)", "Topprankade", "Alla") + items.map { it.subCategory }.filter { it.isNotBlank() }.distinct().sorted()
+    }
+    var selFilter by remember { mutableStateOf("Senast tillagda") }
+    val list = remember(items, selFilter) {
+        when (selFilter) {
+            "Senast tillagda" -> items.sortedByDescending { it.addedTimestamp }
+            "Nysläppta (2025–2026)" -> items.filter { it.year == "2026" || it.year == "2025" }.ifEmpty { items.sortedByDescending { it.year } }
+            "Topprankade" -> items.sortedByDescending { it.rating.toDoubleOrNull() ?: 0.0 }
+            "Alla" -> items
+            else -> items.filter { it.subCategory == selFilter }
+        }
+    }
+    var focused by remember { mutableStateOf(list.firstOrNull()) }
+    LaunchedEffect(list) { if (list.isNotEmpty() && !list.contains(focused)) focused = list.first() }
+
+    Row(modifier = Modifier.fillMaxSize().padding(horizontal = 42.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+        LazyColumn(modifier = Modifier.width(240.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            item { Text(title, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 8.dp)) }
+            items(filters) { f ->
+                val active = selFilter == f
+                Box(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(if (active) Color(0xFF2563EB) else Color(0x12FFFFFF)).focusable().clickable { selFilter = f }.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    Text(f, color = Color.White, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+
+        Column(modifier = Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            focused?.let { info ->
+                Surface(color = Color(0x18FFFFFF), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Color(0x26FFFFFF)), modifier = Modifier.fillMaxWidth()) {
+                    Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(info.title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                if (info.year.isNotBlank()) Badge(info.year, Color(0xFF1E3A8A))
+                                if (info.qualityBadge.isNotBlank()) Badge(info.qualityBadge, Color(0xFF065F46))
+                                if (info.rating.isNotBlank()) Badge("★ ${info.rating}", Color(0xFF78350F))
+                            }
+                            Text(info.plot.ifBlank { "${info.subCategory} • ${info.category}" }, color = Color(0xFF9CA3AF), fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        }
+                        OutlinedButton(onClick = { onToggleFav(info.id) }, border = BorderStroke(1.dp, Color(0x55FFFFFF))) {
+                            Icon(if (favorites.contains(info.id)) Icons.Default.Favorite else Icons.Default.FavoriteBorder, contentDescription = null, tint = Color(0xFFF87171))
+                            Spacer(Modifier.width(6.dp))
+                            Text(if (favorites.contains(info.id)) "Favorit" else "Spara", color = Color.White)
+                        }
+                    }
+                }
+            }
+            if (list.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Inga titlar hittades.", color = Color(0xFF9CA3AF)) }
+            } else {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp), contentPadding = PaddingValues(vertical = 8.dp)) {
+                    items(list.take(250), key = { it.id }) { item ->
+                        Box(Modifier.onFocusChanged { if (it.isFocused) focused = item }) {
+                            MediaCard(item, item.type != TvContentType.LIVE) { onSelect(item) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Shelf(title: String, items: List<TvMediaItem>, poster: Boolean, onPlay: (TvMediaItem) -> Unit, onMore: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 42.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(title, color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+            Text("Visa alla ›", color = Color(0xFF9CA3AF), fontSize = 14.sp, modifier = Modifier.focusable().clickable { onMore() }.padding(8.dp))
+        }
+        LazyRow(contentPadding = PaddingValues(horizontal = 42.dp), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+            items(items, key = { it.id }) { item -> MediaCard(item, poster) { onPlay(item) } }
+        }
+    }
+}
+
+@Composable
+private fun MediaCard(item: TvMediaItem, poster: Boolean, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (focused) 1.08f else 1f, label = "card")
+    Column(modifier = Modifier.width(if (poster) 150.dp else 230.dp).scale(scale).onFocusChanged { focused = it.isFocused }.focusable().clickable { onClick() }) {
+        Box(
+            modifier = Modifier.fillMaxWidth().aspectRatio(if (poster) 2f / 3f else 16f / 9f).clip(RoundedCornerShape(16.dp)).background(Color(0xFF141926))
+                .border(if (focused) 3.dp else 1.dp, if (focused) Color.White else Color(0x22FFFFFF), RoundedCornerShape(16.dp))
+        ) {
+            if (item.posterUrl.isNotBlank()) {
+                AsyncImage(item.posterUrl, contentDescription = null, contentScale = if (poster) ContentScale.Crop else ContentScale.Fit, modifier = Modifier.fillMaxSize().padding(if (poster) 0.dp else 10.dp))
+            } else {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(item.title.take(2).uppercase(), color = Color(0xFF93C5FD), fontSize = 24.sp, fontWeight = FontWeight.Bold) }
+            }
+            if (item.qualityBadge.isNotBlank()) {
+                Box(Modifier.align(Alignment.TopStart).padding(8.dp).clip(RoundedCornerShape(6.dp)).background(Color(0xCC065F46)).padding(horizontal = 6.dp, vertical = 2.dp)) {
+                    Text(item.qualityBadge, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(item.title, color = if (focused) Color.White else Color(0xFFE5E7EB), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text("${item.country} • ${item.subCategory}", color = Color(0xFF9CA3AF), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun Badge(text: String, bg: Color) {
+    Box(Modifier.clip(RoundedCornerShape(6.dp)).background(bg).padding(horizontal = 8.dp, vertical = 3.dp)) {
+        Text(text, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun SeriesScreen(series: TvMediaItem, account: TvAccount?, userAgent: String, isFavorite: Boolean, onToggleFav: () -> Unit, onPlayEp: (TvEpisode) -> Unit, onBack: () -> Unit) {
+    var seasons by remember { mutableStateOf>>(emptyMap()) }
+    var selSeason by remember { mutableStateOf(1) }
+    LaunchedEffect(series.id) {
+        val loaded = TvEngine.loadEpisodes(account, series.seriesId, userAgent)
+        seasons = loaded
+        selSeason = loaded.keys.firstOrNull() ?: 1
+    }
+    val eps = seasons[selSeason].orEmpty()
+
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 42.dp, vertical = 24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+            if (series.posterUrl.isNotBlank()) AsyncImage(series.posterUrl, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.width(130.dp).aspectRatio(2f / 3f).clip(RoundedCornerShape(14.dp)))
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(series.title, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
+                Text("${series.subCategory} • ${series.year}", color = Color(0xFF93C5FD), fontSize = 14.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(onClick = onToggleFav) { Text(if (isFavorite) "I Favoriter" else "Spara", color = Color.White) }
+                    OutlinedButton(onClick = onBack) { Text("Tillbaka", color = Color.White) }
+                }
+            }
+        }
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            items(seasons.keys.sorted()) { s ->
+                Button(onClick = { selSeason = s }, colors = ButtonDefaults.buttonColors(containerColor = if (selSeason == s) Color.White else Color(0x22FFFFFF), contentColor = if (selSeason == s) Color.Black else Color.White)) {
+                    Text("Säsong $s")
+                }
+            }
+        }
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
+            items(eps, key = { it.id }) { ep ->
+                Surface(color = Color(0x18FFFFFF), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth().focusable().clickable { onPlayEp(ep) }) {
+                    Row(modifier = Modifier.padding(14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text("Avsnitt ${ep.episodeNum}: ${ep.title}", color = Color.White, fontWeight = FontWeight.Bold)
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchScreen(catalog: TvCatalog, onSelect: (TvMediaItem) -> Unit) {
+    var q by remember { mutableStateOf("") }
+    val all = catalog.liveChannels + catalog.movies + catalog.series
+    val hits = remember(q, all) {
+        val t = q.trim().lowercase()
+        if (t.length < 2) emptyList() else all.filter { it.title.lowercase().contains(t) || it.country.lowercase().contains(t) || it.subCategory.lowercase().contains(t) }.take(80)
+    }
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 42.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        OutlinedTextField(value = q, onValueChange = { q = it }, label = { Text("Sök kanal, land, film eller serie") }, singleLine = true, colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White), modifier = Modifier.fillMaxWidth(0.6f))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            items(hits, key = { it.id }) { MediaCard(it, it.type != TvContentType.LIVE) { onSelect(it) } }
+        }
+    }
+}
+
+@Composable
+private fun SettingsScreen(
+    settings: TvSettings,
+    accounts: List<TvAccount>,
+    activeId: String,
+    onSaveSettings: (TvSettings) -> Unit,
+    onAddAccount: (TvAccount) -> Unit,
+    onSelectAccount: (String) -> Unit,
+    onDeleteAccount: (String) -> Unit
+) {
+    var tab by remember { mutableStateOf(SettingsTab.ACCOUNTS) }
+    var name by remember { mutableStateOf("Mitt IPTV") }
+    var m3u by remember { mutableStateOf("") }
+    var server by remember { mutableStateOf("") }
+    var user by remember { mutableStateOf("") }
+    var pass by remember { mutableStateOf("") }
+
+    Row(modifier = Modifier.fillMaxSize().padding(horizontal = 42.dp), horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+        Column(modifier = Modifier.width(230.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SettingsTab.entries.forEach { t ->
+                Button(onClick = { tab = t }, colors = ButtonDefaults.buttonColors(containerColor = if (tab == t) Color.White else Color(0x18FFFFFF), contentColor = if (tab == t) Color.Black else Color.White), modifier = Modifier.fillMaxWidth()) {
+                    Text(t.label, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        LazyColumn(modifier = Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(bottom = 36.dp)) {
+            when (tab) {
+                SettingsTab.ACCOUNTS -> {
+                    item {
+                        accounts.forEach { acc ->
+                            Surface(color = if (acc.id == activeId) Color(0x332563EB) else Color(0x16FFFFFF), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                                Row(modifier = Modifier.padding(14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(acc.name, color = Color.White, fontWeight = FontWeight.Bold)
+                                        Text("${acc.mode} • ${if (acc.mode == "XTREAM") acc.server else acc.m3uUrl}", color = Color(0xFF9CA3AF), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(onClick = { onSelectAccount(acc.id) }) { Icon(Icons.Default.Check, contentDescription = null); Spacer(Modifier.width(4.dp)); Text(if (acc.id == activeId) "Aktivt" else "Välj") }
+                                        OutlinedButton(onClick = { onDeleteAccount(acc.id) }) { Icon(Icons.Default.Delete, contentDescription = null, tint = Color(0xFFF87171)) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    item {
+                        OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Kontonamn") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(value = m3u, onValueChange = { m3u = it }, label = { Text("M3U-URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        Spacer(Modifier.height(8.dp))
+                        Button(onClick = { if (m3u.isNotBlank()) { onAddAccount(TvAccount("acc_${System.currentTimeMillis()}", name.ifBlank { "M3U" }, "M3U", m3uUrl = m3u.trim())); m3u = "" } }) { Text("Spara M3U") }
+                        Spacer(Modifier.height(14.dp))
+                        OutlinedTextField(value = server, onValueChange = { server = it }, label = { Text("Xtream Server-URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(value = user, onValueChange = { user = it }, label = { Text("Användarnamn") }, singleLine = true, modifier = Modifier.weight(1f))
+                            OutlinedTextField(value = pass, onValueChange = { pass = it }, label = { Text("Lösenord") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.weight(1f))
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Button(onClick = { if (server.isNotBlank() && user.isNotBlank() && pass.isNotBlank()) { onAddAccount(TvAccount("acc_${System.currentTimeMillis()}", name.ifBlank { "Xtream" }, "XTREAM", server = server.trim(), username = user.trim(), password = pass.trim())); server = ""; user = ""; pass = "" } }) { Text("Spara Xtream") }
+                    }
+                }
+                SettingsTab.PLAYBACK -> {
+                    item {
+                        ToggleRow("Stor buffert", "Bättre stabilitet för Live TV", settings.largeBuffer) { onSaveSettings(settings.copy(largeBuffer = it)) }
+                        ToggleRow("Hårdvaruavkodning", "Använder TV:ns hårdvaruavkodare", settings.hardwareDecoding) { onSaveSettings(settings.copy(hardwareDecoding = it)) }
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            listOf("IPTVSmartersPro", "VLC/3.0.20", "TiviMate/4.7.0").forEach { ua ->
+                                Button(onClick = { onSaveSettings(settings.copy(userAgent = ua)) }, colors = ButtonDefaults.buttonColors(containerColor = if (settings.userAgent == ua) Color.White else Color(0x22FFFFFF), contentColor = if (settings.userAgent == ua) Color.Black else Color.White)) { Text(ua) }
+                            }
+                        }
+                    }
+                }
+                SettingsTab.CONTENT -> {
+                    item {
+                        ToggleRow("Dölj vuxeninnehåll", "Filtrerar bort 18+ / XXX", settings.hideAdult) { onSaveSettings(settings.copy(hideAdult = it)) }
+                        ToggleRow("PIN-skydd", "Kräver PIN vid låst innehåll", settings.parentalEnabled) { onSaveSettings(settings.copy(parentalEnabled = it)) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToggleRow(title: String, sub: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, color = Color.White, fontWeight = FontWeight.Bold)
+            Text(sub, color = Color(0xFF9CA3AF), fontSize = 12.sp)
+        }
+        Switch(checked = checked, onCheckedChange = onChange, colors = SwitchDefaults.colors(checkedThumbColor = Color.Black, checkedTrackColor = Color.White))
+    }
+}
+
+@Composable
+private fun PlayerViewScreen(
+    item: TvMediaItem,
+    liveChannels: List<TvMediaItem>,
+    settings: TvSettings,
+    isFavorite: Boolean,
+    onToggleFav: () -> Unit,
+    onZap: (TvMediaItem) -> Unit,
+    onExit: () -> Unit
+) {
+    val ctx = LocalContext.current
+    var overlay by remember { mutableStateOf(true) }
+    var aspect by remember { mutableStateOf(settings.aspectMode) }
+    var info by remember { mutableStateOf(TvStreamInfo(resolution = item.qualityBadge)) }
+    var audios by remember { mutableStateOf<List<TvTrackOption>>(emptyList()) }
+    var subs by remember { mutableStateOf<List<TvTrackOption>>(emptyList()) }
+    var menu by remember { mutableStateOf<String?>(null) }
+
+    val player = remember(item.streamUrl, settings.largeBuffer, settings.hardwareDecoding) {
+        val ds = OkHttpDataSource.Factory(TvEngine.buildClient(settings.userAgent))
+        val lc = DefaultLoadControl.Builder().setBufferDurationsMs(15000, 60000, 2500, 5000).build()
+        val rf = DefaultRenderersFactory(ctx).setExtensionRendererMode(
+            if (settings.hardwareDecoding) DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER else DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF
+        )
+        ExoPlayer.Builder(ctx).setRenderersFactory(rf).setMediaSourceFactory(DefaultMediaSourceFactory(ds)).setLoadControl(lc).build().apply {
+            setMediaItem(ExoMediaItem.fromUri(item.streamUrl))
+            playWhenReady = true
+            prepare()
+        }
+    }
+
+    DisposableEffect(player) {
+        val l = object : Player.Listener {
+            override fun onTracksChanged(tracks: Tracks) {
+                var res = item.qualityBadge
+                var fps = ""
+                var vc = ""
+                var aLang = ""
+                var sLang = "Av"
+                val aList = mutableListOf<TvTrackOption>()
+                val sList = mutableListOf<TvTrackOption>()
+                for (gi in tracks.groups.indices) {
+                    val g = tracks.groups[gi]
+                    for (ti in 0 until g.length) {
+                        val fmt = g.getTrackFormat(ti)
+                        val sel = g.isTrackSelected(ti)
+                        when (g.type) {
+                            C.TRACK_TYPE_VIDEO -> if (sel && fmt.height > 0) {
+                                res = when {
+                                    fmt.height >= 2160 -> "4K (${fmt.width}×${fmt.height})"
+                                    fmt.height >= 1080 -> "1080p (${fmt.width}×${fmt.height})"
+                                    fmt.height >= 720 -> "720p (${fmt.width}×${fmt.height})"
+                                    else -> "${fmt.height}p"
+                                }
+                                if (fmt.frameRate > 0f) fps = "${fmt.frameRate.toInt()} fps"
+                                vc = fmt.sampleMimeType?.substringAfter("/")?.uppercase().orEmpty()
+                            }
+                            C.TRACK_TYPE_AUDIO -> {
+                                val lbl = langLabel(fmt.language, fmt.label, "Ljud ${aList.size + 1}")
+                                aList.add(TvTrackOption(lbl, gi, ti, sel))
+                                if (sel) aLang = lbl
+                            }
+                            C.TRACK_TYPE_TEXT -> {
+                                val lbl = langLabel(fmt.language, fmt.label, "Undertext ${sList.size + 1}")
+                                sList.add(TvTrackOption(lbl, gi, ti, sel))
+                                if (sel) sLang = lbl
+                            }
+                        }
+                    }
+                }
+                audios = aList; subs = sList
+                info = TvStreamInfo(res.ifBlank { "Auto" }, fps, vc, aLang.ifBlank { "Standard" }, sLang)
+            }
+        }
+        player.addListener(l)
+        onDispose { player.removeListener(l); player.release() }
+    }
+
+    LaunchedEffect(overlay, menu, item.id) { if (overlay && menu == null) { delay(6500); overlay = false } }
+
+    fun zap(delta: Int) {
+        if (item.type == TvContentType.LIVE && liveChannels.isNotEmpty()) {
+            val i = liveChannels.indexOfFirst { it.id == item.id }
+            if (i != -1) onZap(liveChannels[(i + delta + liveChannels.size) % liveChannels.size])
+        }
+    }
+
+    Box(
+        modifier = Modifier.fillMaxSize().background(Color.Black).focusable().onPreviewKeyEvent { ev ->
+            if (ev.type == KeyEventType.KeyDown) {
+                when (ev.nativeKeyEvent.keyCode) {
+                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> { if (menu != null) menu = null else overlay = !overlay; true }
+                    KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_DPAD_UP -> { if (menu == null) zap(1); true }
+                    KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_DPAD_DOWN -> { if (menu == null) zap(-1); true }
+                    KeyEvent.KEYCODE_BACK -> { if (menu != null) menu = null else onExit(); true }
+                    else -> false
+                }
+            } else false
+        }
+    ) {
+        AndroidView(
+            factory = { c -> PlayerView(c).apply { this.player = player; useController = false; resizeMode = if (aspect == 1) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT } },
+            update = { v -> v.player = player; v.resizeMode = if (aspect == 1) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        if (menu != null) {
+            Surface(color = Color(0xEB0E1320), shape = RoundedCornerShape(20.dp), modifier = Modifier.align(Alignment.Center).width(400.dp)) {
+                Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(if (menu == "AUDIO") "Välj ljudspråk" else "Välj undertext", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                    if (menu == "SUB") {
+                        Button(onClick = { player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build(); menu = null }, modifier = Modifier.fillMaxWidth()) { Text("Av") }
+                    }
+                    val list = if (menu == "AUDIO") audios else subs
+                    if (list.isEmpty()) Text("Inga extra spår hittades.", color = Color(0xFF9CA3AF))
+                    list.forEach { opt ->
+                        Button(onClick = {
+                            val grp = player.currentTracks.groups.getOrNull(opt.groupIndex)
+                            if (grp != null) {
+                                val b = player.trackSelectionParameters.buildUpon()
+                                if (menu == "SUB") b.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                                player.trackSelectionParameters = b.setOverrideForType(TrackSelectionOverride(grp.mediaTrackGroup, opt.trackIndex)).build()
+                            }
+                            menu = null
+                        }, modifier = Modifier.fillMaxWidth()) { Text(opt.label) }
+                    }
+                    OutlinedButton(onClick = { menu = null }, modifier = Modifier.fillMaxWidth()) { Text("Stäng", color = Color.White) }
+                }
+            }
+        }
+
+        AnimatedVisibility(visible = overlay, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomCenter)) {
+            Surface(color = Color(0xD90A0E17), shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(horizontal = 36.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("${item.country} • ${item.subCategory}", color = Color(0xFF93C5FD), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text(item.title, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Badge("Upplösning: ${info.resolution}", Color(0xFF065F46))
+                            if (info.fps.isNotBlank()) Badge(info.fps, Color(0xFF1E3A8A))
+                            if (info.videoCodec.isNotBlank()) Badge(info.videoCodec, Color(0xFF374151))
+                            Badge("Ljud: ${info.activeAudioLang}", Color(0xFF312E81))
+                            Badge("Text: ${info.activeSubtitleLang}", Color(0xFF4C1D95))
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(onClick = { if (player.isPlaying) player.pause() else player.play() }) { Text(if (player.isPlaying) "Pausa" else "Spela") }
+                        OutlinedButton(onClick = { menu = "AUDIO" }) { Icon(Icons.Default.Audiotrack, contentDescription = null, tint = Color.White); Spacer(Modifier.width(6.dp)); Text("Språk (${audios.size})", color = Color.White) }
+                        OutlinedButton(onClick = { menu = "SUB" }) { Icon(Icons.Default.Subtitles, contentDescription = null, tint = Color.White); Spacer(Modifier.width(6.dp)); Text("Undertext (${subs.size})", color = Color.White) }
+                        OutlinedButton(onClick = { aspect = if (aspect == 0) 1 else 0 }) { Text(if (aspect == 0) "Zoom" else "Passa", color = Color.White) }
+                        OutlinedButton(onClick = onToggleFav) { Text(if (isFavorite) "★ Favorit" else "☆ Favorit", color = Color.White) }
+                        OutlinedButton(onClick = onExit) { Text("Stäng", color = Color.White) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun langLabel(code: String?, label: String?, fallback: String): String {
+    if (!label.isNullOrBlank()) return label
+    if (!code.isNullOrBlank() && code != "und") {
+        val d = Locale.forLanguageTag(code).getDisplayLanguage(Locale("sv"))
+        if (d.isNotBlank()) return d.replaceFirstChar { it.uppercase() }
+        return code.uppercase()
+    }
+    return fallback
+}
+
+@Composable
+private fun PinDialog(expected: String, onOk: () -> Unit, onCancel: () -> Unit) {
+    var code by remember { mutableStateOf("") }
+    var err by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxSize().background(Color(0xD9000000)), contentAlignment = Alignment.Center) {
+        Surface(color = Color(0xFF141926), shape = RoundedCornerShape(20.dp), modifier = Modifier.width(360.dp)) {
+            Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Default.Lock, contentDescription = null, tint = Color.White)
+                Text("Ange PIN-kod", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                OutlinedTextField(value = code, onValueChange = { err = false; if (it.length <= 4) code = it.filter(Char::isDigit) }, singleLine = true, visualTransformation = PasswordVisualTransformation())
+                if (err) Text("Fel PIN-kod", color = Color(0xFFF87171), fontSize = 12.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(onClick = onCancel) { Text("Avbryt", color = Color.White) }
+                    Button(onClick = { if (code == expected) onOk() else err = true }) { Text("Lås upp") }
+                }
+            }
+        }
+    }
+}
+
+private fun isAdultItem(item: TvMediaItem): Boolean {
+    val t = "${item.title} ${item.category}".lowercase()
+    return t.contains("xxx") || t.contains("adult") || t.contains("18+") || t.contains("porn")
+}
+
+private fun prefs(ctx: Context) = ctx.getSharedPreferences("ulf_tv_prefs", Context.MODE_PRIVATE)
+private fun loadSettings(ctx: Context): TvSettings {
+    val p = prefs(ctx)
+    return TvSettings(
+        userAgent = p.getString("ua", "IPTVSmartersPro") ?: "IPTVSmartersPro",
+        largeBuffer = p.getBoolean("buf", true),
+        hardwareDecoding = p.getBoolean("hw", true),
+        hideAdult = p.getBoolean("adult", true),
+        parentalPin = p.getString("pin", "0000") ?: "0000",
+        parentalEnabled = p.getBoolean("pin_on", false),
+        aspectMode = p.getInt("aspect", 0)
+    )
+}
+private fun saveSettings(ctx: Context, s: TvSettings) {
+    prefs(ctx).edit().putString("ua", s.userAgent).putBoolean("buf", s.largeBuffer).putBoolean("hw", s.hardwareDecoding).putBoolean("adult", s.hideAdult).putString("pin", s.parentalPin).putBoolean("pin_on", s.parentalEnabled).putInt("aspect", s.aspectMode).apply()
+}
+private fun loadAccounts(ctx: Context): List<TvAccount> = try {
+    val arr = JSONArray(prefs(ctx).getString("accs", "[]") ?: "[]")
+    (0 until arr.length()).mapNotNull { i ->
+        val o = arr.optJSONObject(i) ?: return@mapNotNull null
+        TvAccount(o.optString("id"), o.optString("name"), o.optString("mode"), o.optString("m3u"), o.optString("srv"), o.optString("usr"), o.optString("pwd"))
+    }
+} catch (_: Exception) { emptyList() }
+private fun saveAccounts(ctx: Context, list: List<TvAccount>) {
+    val arr = JSONArray()
+    list.forEach { arr.put(JSONObject().put("id", it.id).put("name", it.name).put("mode", it.mode).put("m3u", it.m3uUrl).put("srv", it.server).put("usr", it.username).put("pwd", it.password)) }
+    prefs(ctx).edit().putString("accs", arr.toString()).apply()
+}
+private fun loadActiveAccountId(ctx: Context) = prefs(ctx).getString("act_acc", "").orEmpty()
+private fun saveActiveAccountId(ctx: Context, id: String) = prefs(ctx).edit().putString("act_acc", id).apply()
+private fun loadFavorites(ctx: Context): Set<String> = prefs(ctx).getStringSet("favs", emptySet())?.toSet() ?: emptySet()
+private fun saveFavorites(ctx: Context, favs: Set<String>) = prefs(ctx).edit().putStringSet("favs", favs).apply()
