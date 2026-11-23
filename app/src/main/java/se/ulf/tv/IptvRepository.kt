@@ -557,7 +557,7 @@ object IptvRepository {
             )
         )
         return CatalogData(
-            live = live,
+            live,
             movies = emptyList(),
             series = emptyList()
         )
