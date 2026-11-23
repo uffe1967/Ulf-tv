@@ -399,7 +399,7 @@ object TvEngine {
         TvCatalog(live, movies, series)
     }
 
-    private fun parseCountryAndSub(category: String, title: String): Pair<String, String> {
+        fun parseCountryAndSub(category: String, title: String): Pair<String, String> {
         val upCat = category.uppercase().trim()
         val upTitle = title.uppercase().trim()
         var country = "Övriga"
