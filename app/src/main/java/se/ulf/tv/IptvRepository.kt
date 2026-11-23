@@ -437,16 +437,16 @@ object IptvRepository {
             ?: Regex("""^\[?([A-Z]{2,5})\]?\s*[\|:\-/\]]""").find(upperTitle)
 
         if (prefixMatch != null) {
-            val code = prefixMatch.groupValues[1]
-            detectedCountry = countryMap[code] ?: code
-        } else {
-            for ((key, label) in countryMap) {
-                if (upperCat.startsWith("$key ") \vert{}\vert{} upperCat.contains(" $key ") || upperCat.contains(label.uppercase())) {
-                    detectedCountry = label
-                    break
-                }
-            }
+    val code = prefixMatch.groupValues[1]
+    detectedCountry = countryMap[code] ?: code
+} else {
+    for ((key, label) in countryMap) {
+        if (upperCat.startsWith("$key ") || upperCat.contains(" $key ") || upperCat.contains(label.uppercase())) {
+            detectedCountry = label
+            break
         }
+    }
+}
 
         val lower = raw.lowercase()
         val sub = when {
