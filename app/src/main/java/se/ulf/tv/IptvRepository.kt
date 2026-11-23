@@ -529,7 +529,7 @@ object IptvRepository {
         }
     }
 
-    fun demoCatalog(): CatalogData {
+   fun demoCatalog(): CatalogData {
         val live = listOf(
             MediaItem(
                 id = "demo_1",
@@ -556,5 +556,10 @@ object IptvRepository {
                 qualityBadge = "4K"
             )
         )
+        return CatalogData(
+            live = live,
+            movies = emptyList(),
+            series = emptyList()
+        )
     }
-            
+}
