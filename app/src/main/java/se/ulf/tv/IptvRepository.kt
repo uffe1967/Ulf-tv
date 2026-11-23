@@ -556,3 +556,5 @@ object IptvRepository {
                 qualityBadge = "4K"
             )
         )
+    }
+            
